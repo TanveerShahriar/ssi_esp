@@ -1,0 +1,37 @@
+# Build output
+/build/
+/out/
+
+# ESP-IDF generated config
+/sdkconfig
+/sdkconfig.old
+/sdkconfig.cmake
+
+# Managed components (auto-downloaded by ESP-IDF)
+/managed_components/
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Visual Studio Code settings (optional)
+.vscode/
+
+# PlatformIO files (if ever used)
+.pio/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Log files
+*.log
+
+# Temporary or backup files
+*.swp
+*.swo
+*.bak
+*~
