@@ -5,46 +5,60 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 static const char *TAG = "qr_scan";
 static lv_obj_t *camera_canvas = NULL;
-static lv_timer_t *camera_timer = NULL;
+static uint8_t *cam_buff = NULL;
 static bool camera_initialized = false;
+static TaskHandle_t camera_task_handle = NULL;
+static bool camera_running = false;
 
-// Camera update callback
-static void camera_update_cb(lv_timer_t *timer)
+// Camera streaming task
+static void camera_stream_task(void *arg)
 {
-    (void)timer;
+    uint32_t cam_buff_size = BSP_LCD_H_RES * BSP_LCD_V_RES * 2;
+    camera_fb_t *pic;
     
-    if (!camera_initialized) {
-        return;
+    ESP_LOGI(TAG, "Camera streaming task started");
+    
+    while (camera_running) {
+        pic = esp_camera_fb_get();
+        if (pic) {
+            bsp_display_lock(0);
+            
+            // Copy frame buffer to canvas buffer
+            memcpy(cam_buff, pic->buf, cam_buff_size);
+            esp_camera_fb_return(pic);
+            
+            if (BSP_LCD_BIGENDIAN) {
+                /* Swap bytes in RGB565 for big-endian displays */
+                lv_draw_sw_rgb565_swap(cam_buff, cam_buff_size);
+            }
+            
+            // Trigger LVGL redraw
+            lv_obj_invalidate(camera_canvas);
+            
+            bsp_display_unlock();
+        } else {
+            ESP_LOGW(TAG, "Failed to get camera frame");
+        }
+        
+        vTaskDelay(1);  // Minimal delay for maximum FPS
     }
-
-    // Get frame buffer from camera
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-        ESP_LOGW(TAG, "Failed to get camera frame");
-        return;
-    }
-
-    // Lock display for update
-    bsp_display_lock(0);
-
-    // Copy frame buffer to canvas
-    if (camera_canvas && fb->format == PIXFORMAT_RGB565) {
-        lv_canvas_set_buffer(camera_canvas, fb->buf, fb->width, fb->height, LV_COLOR_FORMAT_RGB565);
-    }
-
-    bsp_display_unlock();
-
-    // Return frame buffer back to camera driver
-    esp_camera_fb_return(fb);
+    
+    ESP_LOGI(TAG, "Camera streaming task stopped");
+    vTaskDelete(NULL);
 }
 
 // Initialize camera
 static esp_err_t init_camera(void)
 {
-    const camera_config_t camera_config = BSP_CAMERA_DEFAULT_CONFIG;
+    camera_config_t camera_config = BSP_CAMERA_DEFAULT_CONFIG;
+    
+    // Use RGB565 for clear color display
+    camera_config.pixel_format = PIXFORMAT_RGB565;
+    camera_config.frame_size = FRAMESIZE_240X240;
     
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK) {
@@ -60,7 +74,7 @@ static esp_err_t init_camera(void)
     }
 
     camera_initialized = true;
-    ESP_LOGI(TAG, "Camera initialized successfully");
+    ESP_LOGI(TAG, "Camera initialized successfully (RGB565 mode)");
     return ESP_OK;
 }
 
@@ -81,30 +95,37 @@ void page_qr_scan(void)
 
     bsp_display_lock(0);
 
-    // Create canvas for camera display
-    camera_canvas = lv_canvas_create(lv_scr_act());
-    
     // Allocate buffer for canvas (240x240 RGB565 = 115200 bytes)
-    static lv_color_t *camera_buf = NULL;
-    if (!camera_buf) {
-        camera_buf = heap_caps_malloc(240 * 240 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-        if (!camera_buf) {
+    if (!cam_buff) {
+        uint32_t cam_buff_size = BSP_LCD_H_RES * BSP_LCD_V_RES * 2;
+        cam_buff = heap_caps_malloc(cam_buff_size, MALLOC_CAP_SPIRAM);
+        if (!cam_buff) {
             ESP_LOGE(TAG, "Failed to allocate canvas buffer");
             bsp_display_unlock();
             return;
         }
     }
-    
-    lv_canvas_set_buffer(camera_canvas, camera_buf, 240, 240, LV_COLOR_FORMAT_RGB565);
-    lv_obj_center(camera_canvas);
 
-    // Create a timer to update camera feed
-    if (camera_timer) {
-        lv_timer_del(camera_timer);
-    }
-    camera_timer = lv_timer_create(camera_update_cb, 33, NULL);  // ~30 FPS
+    // Create canvas for camera display
+    camera_canvas = lv_canvas_create(lv_scr_act());
+    lv_canvas_set_buffer(camera_canvas, cam_buff, BSP_LCD_H_RES, BSP_LCD_V_RES, LV_COLOR_FORMAT_RGB565);
+    lv_obj_center(camera_canvas);
 
     bsp_display_unlock();
 
-    ESP_LOGI(TAG, "Camera feed started");
+    // Start camera streaming task
+    if (!camera_running) {
+        camera_running = true;
+        xTaskCreatePinnedToCore(
+            camera_stream_task,
+            "camera_stream",
+            4096,
+            NULL,
+            5,
+            &camera_task_handle,
+            1
+        );
+    }
+
+    ESP_LOGI(TAG, "Camera feed started - streaming at maximum FPS");
 }
