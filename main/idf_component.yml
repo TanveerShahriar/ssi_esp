@@ -1,3 +1,5 @@
 dependencies:
   esp32_s3_eye:
     version: '*'
+  espressif/quirc:
+    version: '^1.2.0'

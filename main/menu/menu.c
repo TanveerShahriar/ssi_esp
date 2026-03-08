@@ -56,6 +56,9 @@ void handle_button(int button)
     }
     else {
         if (button == 2) {
+            if (main_menu[current_index].func == page_qr_scan) {
+                page_qr_scan_stop();
+            }
             in_menu = true;
             draw_menu();
         }
